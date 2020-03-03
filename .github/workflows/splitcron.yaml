@@ -1,0 +1,38 @@
+name: Split synchronisation
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  push:
+    branches:
+      - master
+
+env:
+  SSH_PRIV_KEY: .ssh/modularise_rsa
+jobs:
+  splitcron:
+    name: Update splits
+
+    runs-on:
+      - ubuntu-latest
+
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.14
+
+      - name: Checkout splitcron repository
+        uses: actions/checkout@v2
+        with:
+          persist-credentials: false
+
+      - name: Set up PubKey authentication
+        run: |
+          gpg --quiet --batch --yes --decrypt --passphrase="${SPLIT_PAT}" --output="${SSH_PRIV_KEY}" "${SSH_PRIV_KEY}.gpg"
+          tail -c 100 "${SSH_PRIV_KEY}"
+        env:
+          SPLIT_PAT: ${{ secrets.SplitPAT }}
+
+      - name: Run splitcron
+        run: go run . --pub-key="${SSH_PRIV_KEY}"
