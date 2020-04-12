@@ -31,6 +31,15 @@ var prometheusJob = Job{
 					"util/stats",
 				},
 			},
+			"discovery": {
+				ModulePath: "github.com/modularise/prometheus-discovery",
+				URL:        "https://github.com/modularise/prometheus-discovery",
+				Branch:     "master",
+				Includes: []string{
+					"discovery",
+					"util/treecache",
+				},
+			},
 		},
 	},
 }
