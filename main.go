@@ -11,13 +11,15 @@ import (
 
 	"github.com/modularise/modularise/cmd"
 	"github.com/modularise/modularise/cmd/config"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"gopkg.in/src-d/go-git.v4"
 	"gopkg.in/src-d/go-git.v4/plumbing"
 	"gopkg.in/yaml.v3"
 
 	"github.com/modularise/splitcron/internal/jobs"
+	"github.com/modularise/splitcron/internal/logger"
 )
 
 var (
@@ -27,17 +29,22 @@ var (
 )
 
 func main() {
-	log := logrus.New()
-
+	var log *zap.Logger
 	cmd := cobra.Command{
 		Use: os.Args[0],
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			if !dryRun && !cmd.Flags().Changed("pub-key") {
 				return errors.New("--pub-key flag must be set when not in dry-run mode")
 			}
+
+			zapCore := logger.NewSplitcronEncoder()
+			zapEncoder := os.Stdout
+			zapLevel := zap.InfoLevel
 			if verbose {
-				log.SetLevel(logrus.DebugLevel)
+				zapLevel = zap.DebugLevel
 			}
+			log = zap.New(zapcore.NewCore(zapCore, zapEncoder, zapLevel))
+
 			return cobra.NoArgs(cmd, args)
 		},
 		Run: func(_ *cobra.Command, _ []string) {
@@ -54,8 +61,8 @@ func main() {
 	}
 }
 
-func runJobs(log *logrus.Logger) {
-	log.Infof("Starting run of %d jobs.", len(jobs.KnownJobs))
+func runJobs(log *zap.Logger) {
+	log.Info("Starting jobs.", zap.Int("job-count", len(jobs.KnownJobs)))
 
 	wc := runtime.NumCPU()
 	if wc > len(jobs.KnownJobs) {
@@ -64,7 +71,7 @@ func runJobs(log *logrus.Logger) {
 	if verbose {
 		wc = 1 // Verbose logs are useless when multiple jobs output simultaneously.
 	}
-	log.Infof("Running with %d parallel jobs.", wc)
+	log.Info("Running jobs in parallel.", zap.Int("parallism", wc))
 
 	wg := sync.WaitGroup{}
 	jc := make(chan *jobs.Job)
@@ -82,20 +89,20 @@ func runJobs(log *logrus.Logger) {
 	log.Info("Finished running all split jobs.")
 }
 
-func jobRunner(log *logrus.Logger, wg *sync.WaitGroup, jobs <-chan *jobs.Job) {
+func jobRunner(log *zap.Logger, wg *sync.WaitGroup, jobs <-chan *jobs.Job) {
 	for j := range jobs {
 		runJob(log, j)
 	}
 	wg.Done()
 }
 
-func runJob(l *logrus.Logger, job *jobs.Job) {
-	log := l.WithField("job", job.Name)
-	log.Infof("Kicking off split job %q.", job.Name)
+func runJob(log *zap.Logger, job *jobs.Job) {
+	log = log.With(zap.String("job", job.Name))
+	log.Info("Starting job.")
 
 	wd, err := ioutil.TempDir("", "splitcron")
 	if err != nil {
-		log.WithError(err).Errorf("Could not create temporary storage for split job %q.", job.Name)
+		log.Error("Could not create temporary storage.", zap.Error(err))
 		return
 	}
 
@@ -106,7 +113,7 @@ func runJob(l *logrus.Logger, job *jobs.Job) {
 		Depth:         1,
 	})
 	if err != nil {
-		log.WithError(err).Errorf("Failed to clone source repository for split job %q.", job.Name)
+		log.Error("Failed to clone source repository.", zap.Error(err))
 		return
 	}
 
@@ -124,12 +131,12 @@ func runJob(l *logrus.Logger, job *jobs.Job) {
 
 	cb, err := yaml.Marshal(&c)
 	if err != nil {
-		log.WithError(err).Errorf("Failed to marshal the modularise configuration for split job %q.", job.Name)
+		log.Error("Failed to marshal the modularise configuration.", zap.Error(err))
 		return
 	}
 	cf := filepath.Join(wd, "modularise.yaml")
 	if err = ioutil.WriteFile(cf, cb, 0644); err != nil {
-		log.WithError(err).Errorf("Failed to write modularise configuration file %q for split job %q.", cf, job.Name)
+		log.Error("Failed to write modularise configuration file.", zap.String("path", cf), zap.Error(err))
 		return
 	}
 
@@ -139,12 +146,12 @@ func runJob(l *logrus.Logger, job *jobs.Job) {
 		Verbose:    verbose,
 	}
 	if err = mc.CheckConfig(); err != nil {
-		log.WithError(err).Errorf("Failed to validate the split configuration for split job %q.", job.Name)
+		log.Error("Failed to validate the split configuration.", zap.String("path", cf), zap.Error(err))
 		return
 	}
 
 	if err = cmd.RunSplit(&mc); err != nil {
-		log.WithError(err).Errorf("Failed to run split job %q.", job.Name)
+		log.Error("Job failed.", zap.Error(err))
 		os.Exit(1)
 	}
 }
